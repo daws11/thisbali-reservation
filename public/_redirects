@@ -1,0 +1,2 @@
+# SPA fallback — let React Router handle client-side routes like /reserve, /confirmation/:id, /admin/*
+/*    /index.html   200
