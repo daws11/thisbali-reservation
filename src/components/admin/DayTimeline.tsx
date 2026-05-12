@@ -8,20 +8,24 @@ import { formatDate } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import type { Booking, BookingStatus } from '@/types'
 import { EmptyState } from '@/components/ui/empty-state'
+import { ModeBadge } from '@/components/ui/badge'
 
-const HOUR_PX = 58
+const HOUR_PX = 66
+const GUTTER_PX = 56
+/** Each column of concurrent bookings is at least this wide; the timeline scrolls horizontally if needed. */
+const MIN_LANE_PX = 188
 const T_START = toMinutes(TIMELINE_START)
 const T_END = toMinutes(TIMELINE_END)
 const HOURS = Math.round((T_END - T_START) / 60)
 const TOTAL_PX = HOURS * HOUR_PX
 
 const BLOCK_STYLE: Record<BookingStatus, { bg: string; text: string; border: string }> = {
-  pending: { bg: 'color-mix(in oklab, var(--color-status-pending) 18%, var(--color-surface))', text: 'var(--color-foreground)', border: 'var(--color-status-pending)' },
-  confirmed: { bg: 'color-mix(in oklab, var(--color-status-pending) 28%, var(--color-surface))', text: 'var(--color-foreground)', border: 'var(--color-status-pending)' },
-  seated: { bg: 'color-mix(in oklab, var(--color-status-seated) 30%, var(--color-surface))', text: 'var(--color-foreground)', border: 'var(--color-status-seated)' },
-  completed: { bg: 'color-mix(in oklab, var(--color-status-completed) 22%, var(--color-surface))', text: 'var(--color-muted-foreground)', border: 'var(--color-status-completed)' },
+  pending: { bg: 'color-mix(in oklab, var(--color-status-pending) 16%, var(--color-surface))', text: 'var(--color-foreground)', border: 'var(--color-status-pending)' },
+  confirmed: { bg: 'color-mix(in oklab, var(--color-status-pending) 26%, var(--color-surface))', text: 'var(--color-foreground)', border: 'var(--color-status-pending)' },
+  seated: { bg: 'color-mix(in oklab, var(--color-status-seated) 26%, var(--color-surface))', text: 'var(--color-foreground)', border: 'var(--color-status-seated)' },
+  completed: { bg: 'color-mix(in oklab, var(--color-status-completed) 18%, var(--color-surface))', text: 'var(--color-muted-foreground)', border: 'var(--color-status-completed)' },
   cancelled: { bg: 'var(--color-surface)', text: 'var(--color-muted-foreground)', border: 'var(--color-border)' },
-  'no-show': { bg: 'color-mix(in oklab, var(--color-status-noshow) 16%, var(--color-surface))', text: 'var(--color-status-cancelled)', border: 'var(--color-status-cancelled)' },
+  'no-show': { bg: 'color-mix(in oklab, var(--color-status-noshow) 14%, var(--color-surface))', text: 'var(--color-status-cancelled)', border: 'var(--color-status-cancelled)' },
   waitlisted: { bg: 'color-mix(in oklab, var(--color-status-waitlisted) 20%, var(--color-surface))', text: 'var(--color-foreground)', border: 'var(--color-status-waitlisted)' },
 }
 
@@ -33,6 +37,7 @@ interface Placed {
   lanes: number
 }
 
+/** Pack overlapping bookings into side-by-side lanes (textbook interval-graph colouring per cluster). */
 function packLanes(bookings: Booking[]): Placed[] {
   const items = bookings
     .filter((b) => b.status !== 'cancelled' && b.mode !== 'waitlist')
@@ -79,12 +84,14 @@ export function DayTimeline({
   onSelect: (id: string) => void
   onCreate: (date: string, time: string) => void
 }) {
-  const ref = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const placed = packLanes(bookings)
+  const maxLanes = placed.reduce((m, p) => Math.max(m, p.lanes), 1)
+  const trackMinWidth = maxLanes * MIN_LANE_PX
   const hourMarks = Array.from({ length: HOURS + 1 }, (_, i) => fromMinutes(T_START + i * 60))
 
   const onBackgroundClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const el = ref.current
+    const el = scrollRef.current
     if (!el) return
     const rect = el.getBoundingClientRect()
     const y = e.clientY - rect.top + el.scrollTop
@@ -99,76 +106,87 @@ export function DayTimeline({
         icon={<CalendarRange />}
         title={`Nothing on ${formatDate(date)}`}
         description="Click anywhere on the timeline to add a booking."
-        className="cursor-pointer"
       />
     )
   }
 
   return (
     <div className="overflow-hidden rounded-2xl border border-border bg-surface">
-      <div className="max-h-[70vh] overflow-y-auto" ref={ref}>
-        <div className="relative grid grid-cols-[3.5rem_1fr]" style={{ height: TOTAL_PX }}>
-          {/* hour gutter */}
-          <div className="relative border-r border-border">
-            {hourMarks.map((t, i) => (
+      <div ref={scrollRef} className="flex max-h-[72vh] overflow-auto">
+        {/* sticky hour gutter */}
+        <div className="sticky left-0 z-20 shrink-0 border-r border-border bg-surface" style={{ width: GUTTER_PX, height: TOTAL_PX }}>
+          {hourMarks.map((t, i) => (
+            <div
+              key={t}
+              className="absolute right-2 -translate-y-1/2 text-[10px] tabular-nums text-muted-foreground"
+              style={{ top: i * HOUR_PX }}
+            >
+              {i === 0 ? '' : t}
+            </div>
+          ))}
+        </div>
+
+        {/* track */}
+        <div className="relative flex-1" style={{ height: TOTAL_PX, minWidth: trackMinWidth }} onClick={onBackgroundClick}>
+          {hourMarks.map((t, i) => {
+            const open = isOpenAt(t) || isOpenAt(fromMinutes(T_START + i * 60 - 1))
+            return (
               <div
                 key={t}
-                className="absolute right-2 -translate-y-1/2 text-[10px] tabular-nums text-muted-foreground"
-                style={{ top: i * HOUR_PX }}
+                className={cn('absolute inset-x-0 border-t', i === 0 ? 'border-transparent' : 'border-border/60')}
+                style={{
+                  top: i * HOUR_PX,
+                  height: HOUR_PX,
+                  background: open ? undefined : 'color-mix(in oklab, var(--color-background) 45%, transparent)',
+                }}
+              />
+            )
+          })}
+
+          {placed.map((p) => {
+            const top = ((p.startMin - T_START) / 60) * HOUR_PX
+            const height = Math.max(34, ((p.endMin - p.startMin) / 60) * HOUR_PX - 3)
+            const widthPct = 100 / p.lanes
+            const leftPct = p.lane * widthPct
+            const st = BLOCK_STYLE[p.booking.status]
+            const table = p.booking.tableId ? tablesById[p.booking.tableId] : null
+            const showTable = height >= 56 && !!table
+            const showMode = height >= 76 && p.booking.mode !== 'reservation'
+            return (
+              <button
+                key={p.booking.id}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onSelect(p.booking.id)
+                }}
+                className="group absolute flex flex-col gap-0.5 overflow-hidden rounded-lg border px-2.5 py-1.5 text-left text-xs leading-tight transition-shadow hover:z-10 hover:shadow-lg hover:shadow-black/8 focus-visible:z-10"
+                style={{
+                  top,
+                  height,
+                  left: `calc(${leftPct}% + 3px)`,
+                  width: `calc(${widthPct}% - 6px)`,
+                  background: st.bg,
+                  borderColor: st.border,
+                  color: st.text,
+                }}
+                title={`${p.booking.timeSlot} · ${p.booking.guest.name} · ${p.booking.pax} ${p.booking.pax === 1 ? 'guest' : 'guests'}${table ? ` · ${table.label}` : ''}`}
               >
-                {i === 0 ? '' : t}
-              </div>
-            ))}
-          </div>
-          {/* track */}
-          <div className="relative" onClick={onBackgroundClick}>
-            {hourMarks.map((t, i) => {
-              const open = isOpenAt(t) || isOpenAt(fromMinutes(T_START + i * 60 - 1))
-              return (
-                <div
-                  key={t}
-                  className={cn('absolute inset-x-0 border-t', i === 0 ? 'border-transparent' : 'border-border/60')}
-                  style={{ top: i * HOUR_PX, height: HOUR_PX, background: open ? undefined : 'color-mix(in oklab, var(--color-background) 35%, transparent)' }}
-                />
-              )
-            })}
-            {placed.map((p) => {
-              const top = ((p.startMin - T_START) / 60) * HOUR_PX
-              const height = Math.max(22, ((p.endMin - p.startMin) / 60) * HOUR_PX - 2)
-              const widthPct = 100 / p.lanes
-              const leftPct = p.lane * widthPct
-              const st = BLOCK_STYLE[p.booking.status]
-              const table = p.booking.tableId ? tablesById[p.booking.tableId] : null
-              const compact = p.lanes > 2 || height < 40
-              return (
-                <button
-                  key={p.booking.id}
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onSelect(p.booking.id)
-                  }}
-                  className="absolute overflow-hidden rounded-md border px-2 py-1 text-left text-xs transition-shadow hover:z-10 hover:shadow-lg hover:shadow-black/8"
-                  style={{
-                    top,
-                    height,
-                    left: `calc(${leftPct}% + 2px)`,
-                    width: `calc(${widthPct}% - 4px)`,
-                    background: st.bg,
-                    borderColor: st.border,
-                    color: st.text,
-                  }}
-                  title={`${p.booking.timeSlot} · ${p.booking.guest.name} · ${p.booking.pax}p${table ? ` · ${table.label}` : ''}`}
-                >
-                  <span className="block truncate font-medium tabular-nums">
-                    {p.booking.timeSlot} {!compact && `· ${p.booking.pax}p`}
+                <span className="flex items-center gap-1.5 font-medium tabular-nums">
+                  {p.booking.timeSlot}
+                  <span className="opacity-70">·</span>
+                  {p.booking.pax}p
+                </span>
+                <span className="line-clamp-2 font-medium leading-snug">{p.booking.guest.name}</span>
+                {showTable && <span className="truncate text-[11px] opacity-80">Table {table.label}</span>}
+                {showMode && (
+                  <span className="mt-auto">
+                    <ModeBadge mode={p.booking.mode} className="text-[10px]" />
                   </span>
-                  <span className="block truncate">{p.booking.guest.name}</span>
-                  {!compact && table && <span className="block truncate text-[10px] opacity-80">Table {table.label}</span>}
-                </button>
-              )
-            })}
-          </div>
+                )}
+              </button>
+            )
+          })}
         </div>
       </div>
     </div>
